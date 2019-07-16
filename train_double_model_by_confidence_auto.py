@@ -101,9 +101,11 @@ def get_arguments():
                         help="Regularisation parameter for L2-loss.")
     parser.add_argument("--min-epoch", type=int, default=0,
                         help="Max training epoch.")
-    parser.add_argument("--max-epoch", type=int, default=200,
+    parser.add_argument("--max-epoch", type=int, default=100,
                         help="Max training epoch.")
-    parser.add_argument("--stop-epoch", type=int, default=100,
+    parser.add_argument("--max-epoch2", type=int, default=100,
+                        help="Max training epoch.")
+    parser.add_argument("--stop-epoch", type=int, default=0,
                         help="early stop epoch.")
     parser.add_argument("--evaluate-epoch", type=int, default=1,
                         help="epoch inteval for evaluation, set 0 to forbid")
@@ -324,7 +326,7 @@ def train_model1_mix2(trainloader,model,optimizer,epoch,logger=None):
     #global_step = epoch * len_iter
 
     iter_loader = iter(trainloader)
-    len_iter = len(iter_loader) * 5
+    len_iter = min(512,len(iter_loader)*5)
     
     for i in range(len_iter):
 
@@ -411,7 +413,7 @@ def train_with_vat(trainloader,model,optimizer,epoch,logger=None):
             logger.info('epoch{} : loss_ce = {:.4f} , loss_cl = {:4f}'.format(epoch, loss_ce.item(),loss_cl.item()))
 
 
-def train_with_mix(trainloader,model,optimizer,epoch,logger=None):
+def train_with_mix(trainloader,model,optimizer,epoch,max_epoch,logger=None):
     model.train()
     len_iter = len(iter(trainloader))
     global_step = epoch * len_iter
@@ -448,7 +450,7 @@ def train_with_mix(trainloader,model,optimizer,epoch,logger=None):
 
         loss_ce = -torch.mean(torch.sum(F.log_softmax(mixed_pred, dim=1) * mixed_target, dim=1))
         loss_cl = mse_fn(mixed_pred,mixed_pred1) / float(args.num_classes)
-        weight_cl = cal_consistency_weight(global_step, end_ep=args.max_epoch * len_iter,init_w=0.0,end_w=10.0)
+        weight_cl = cal_consistency_weight(global_step, end_ep=max_epoch * len_iter,init_w=0.0,end_w=10.0)
 
         global_step += 1
 
@@ -832,8 +834,8 @@ def main():
     
     
     optimizer1 = AdamW(model1.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    optimizer2 = torch.optim.Adam(model2.parameters(), lr=args.lr, weight_decay=0)
-    #optimizer2 = AdamW(model2.parameters(), lr=args.lr, weight_decay=0)
+    #optimizer2 = torch.optim.Adam(model2.parameters(), lr=args.lr, weight_decay=0)
+    optimizer2 = AdamW(model2.parameters(), lr=args.lr, weight_decay=0)
 
     df = pd.DataFrame()
     stats_path = osp.join(args.snapshot_dir,'stats.txt')
@@ -845,14 +847,16 @@ def main():
     train_labels = np.array([],dtype=np.int32)
 
     _ , best_model1_acc = evaluate(validloader,model1,prefix='val')
+    _ , best_model2_acc = evaluate(validloader,model2,prefix='val')
     best_model1_path = osp.join(args.snapshot_dir,'best_model1.pth')
     best_model2_path = osp.join(args.snapshot_dir,'best_model2.pth')
     torch.save(model1.state_dict(), best_model1_path)
     torch.save(model2.state_dict(), best_model2_path)
     skip_model2 = False
+    end_iter = False
 
 
-    for i_round in range(args.round):        
+    for i_round in range(args.round):
 
         model1_save_path = osp.join(args.snapshot_dir,'model1_round_{}.pth'.format(i_round))
         model2_save_path = osp.join(args.snapshot_dir,'model2_round_{}.pth'.format(i_round))
@@ -904,12 +908,10 @@ def main():
             
             
             #reset_learning_rate_adam(optimizer2)
-            for epoch in range(args.max_epoch):
-                #adjust_learning_rate_adam(optimizer2,epoch)
-                if args.vat:
-                    train_with_vat(trainloader,model2,optimizer2,epoch,logger)
-                else:
-                    train_with_mix(trainloader,model2,optimizer2,epoch,logger)
+            for epoch in range(args.max_epoch2):
+                #adjust_learning_rate_adam(optimizer2,epoch)            
+                #train_with_vat(trainloader,model2,optimizer2,epoch,logger)
+                train_with_mix(trainloader,model2,optimizer2,epoch,args.max_epoch2,logger=logger)
 
                 #torch.save(model2.state_dict(), model2_save_path)
                 #evaluate(validloader,model2,logger,'val')
@@ -931,8 +933,6 @@ def main():
                         torch.save(model2.state_dict(), model2_save_path)
                         evaluate(testloader,model2,logger,'test')
 
-                    if epoch - best_val_epoch >= args.stop_epoch:
-                        break
 
             model2.load_state_dict(torch.load(model2_save_path))        
 
@@ -946,7 +946,8 @@ def main():
             evaluate(label_loader2,model2,logger,'reward')        
             evaluate(testloader,model2,logger,'test')
 
-            torch.save(model2.state_dict(), best_model2_path)
+            if best_val_acc > best_model2_acc:
+                torch.save(model2.state_dict(), best_model2_path)            
         
         else:
             logger.info('skip!')
@@ -994,28 +995,29 @@ def main():
         #phase4: refine model1 by confident data and reward data
         train_dataset = torch.utils.data.ConcatDataset([confident_dataset,labelset])
 
-        batch_sampler = TwoStreamBatchSampler(
-            np.arange(len(confident_dataset)),
-            np.arange(len(labelset)) + len(confident_dataset),
-            args.batch_size//2,
-            args.batch_size//4
-        )
 
-
-        '''trainloader = torch.utils.data.DataLoader(
+        trainloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size= args.batch_size//2,
             num_workers=args.num_workers,
             shuffle=True,
             pin_memory=True 
-        )'''
+        )
+
+
+        '''batch_sampler = TwoStreamBatchSampler(
+            np.arange(len(confident_dataset)),
+            np.arange(len(labelset)) + len(confident_dataset),
+            args.batch_size//2,
+            args.batch_size//4
+        )        
 
         trainloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_sampler=batch_sampler,
             num_workers=args.num_workers,
             pin_memory=True 
-        )
+        )'''
         
         other_loader = torch.utils.data.DataLoader(
             other_dataset,
@@ -1058,10 +1060,7 @@ def main():
                     best_val_loss = val_loss
                     best_val_epoch = epoch                    
                     torch.save(model1.state_dict(), model1_save_path)
-                    evaluate(testloader,model1,logger,'test')    
-                
-                if epoch - best_val_epoch >= args.stop_epoch:
-                    break            
+                    evaluate(testloader,model1,logger,'test')
                 
         
         model1.load_state_dict(torch.load(model1_save_path))
@@ -1072,17 +1071,21 @@ def main():
 
         if best_model1_acc >= best_val_acc:
             prop += args.round_ratio
-            model1.load_state_dict(torch.load(best_model1_path))
-            model2.load_state_dict(torch.load(best_model2_path))    
-            skip_model2 = True        
+            #model1.load_state_dict(torch.load(best_model1_path))
+            #model2.load_state_dict(torch.load(best_model2_path))    
+            #skip_model2 = True        
         else:         
             prop += args.round_ratio2 
             torch.save(model1.state_dict(), best_model1_path)
             best_model1_acc = best_val_acc
-            skip_model2 = False
+            #skip_model2 = False
         
-        if prop >= 1:
+        if end_iter:
             break
+
+        if prop >= 1:
+            prop = 1.0
+            end_iter = True 
 
     #after all iterations, train a new model by all data
 
