@@ -117,6 +117,7 @@ def get_arguments():
 args = get_arguments()
 
 ce_fn = torch.nn.CrossEntropyLoss()
+ce_fn2 = torch.nn.CrossEntropyLoss(reduction=None)
 mse_fn = torch.nn.MSELoss()
 kl_fn = torch.nn.KLDivLoss(reduction='batchmean')
 l1_fn = torch.nn.L1Loss()
@@ -240,7 +241,6 @@ def train_model1(confident_loader,unconfident_loader,model,optimizer,epoch,logge
             logger.info('epoch{} : loss_ce = {:.4f} , loss_cl = {:4f}'.format(epoch, loss_ce.item(),loss_cl.item()))
 
 
-
 def train_model1_mix(confident_loader,unconfident_loader,model,optimizer,epoch,iround,logger=None):
     model.train()
 
@@ -326,7 +326,7 @@ def train_model1_mix2(trainloader,model,optimizer,epoch,logger=None):
     #global_step = epoch * len_iter
 
     iter_loader = iter(trainloader)
-    len_iter = min(512,len(iter_loader)*5)
+    len_iter = max(512,len(iter_loader))
     
     for i in range(len_iter):
 
@@ -428,29 +428,24 @@ def train_with_mix(trainloader,model,optimizer,epoch,max_epoch,logger=None):
             x = x.cuda()
             y = y.cuda()
             x1 = x1.cuda()
-            y_hot = y_hot.cuda()        
-    
-        l = np.random.beta(args.alpha, args.alpha)
-        l = max(l, 1-l)
-
-        idx = torch.randperm(size)
-        input_a, input_b = x, x[idx]
-        input1_a, input1_b = x1, x1[idx]
-        target_a, target_b = y_hot, y_hot[idx]
-
-        mixed_input = l * input_a + (1 - l) * input_b
-        mixed_input1 = l * input1_a + (1 - l) * input1_b
-        mixed_target = l * target_a + (1 - l) * target_b
-
-        mixed_pred = model(mixed_input)
+            y_hot = y_hot.cuda()
+        
+        feat = model.feat(x)
+        output = model.fc(feat)
+        pred = torch.softmax(output,1)
+        
         with torch.no_grad():
-            mixed_pred1 = model(mixed_input1)
+            feat1 = model.feat(x1)
+            output1 = model.fc(feat1)
+            pred1 = torch.softmax(output1,1)         
+
 
         #loss_ce = ce_fn(y_pred,y)
 
-        loss_ce = -torch.mean(torch.sum(F.log_softmax(mixed_pred, dim=1) * mixed_target, dim=1))
-        loss_cl = mse_fn(mixed_pred,mixed_pred1) / float(args.num_classes)
-        weight_cl = cal_consistency_weight(global_step, end_ep=max_epoch * len_iter,init_w=0.0,end_w=10.0)
+        loss_ce = ce_fn(output,y)
+        loss_cl = mse_fn(feat,feat1)
+        #loss_cl = mse_fn(pred,pred1)
+        weight_cl = cal_consistency_weight(global_step, end_ep=max_epoch * len_iter // 2,init_w=0.0,end_w=5.0)
 
         global_step += 1
 
@@ -578,7 +573,7 @@ def compute_confidences(model,dst1,dst2):
             idx +=  size
         
         return confidences.cpu()
-                
+
 
 def compute_confidence(feat,label,probs,base_feats,base_labels,base_probs):
     '''print(feat)
@@ -693,7 +688,7 @@ def adjust_learning_rate_adam(optimizer, epoch):
     #print(epoch, lr)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-    
+
 def reset_learning_rate_adam(optimizer):
     """Sets the learning rate to the initial LR decayed by 5 at [240] epochs"""
     
