@@ -160,12 +160,14 @@ def train(trainloader,model,optimizer,epoch,logger=None):
             x = x.cuda()
             y = y.cuda()
             x1 = x1.cuda()
-        y_pred = model(x)
+        output = model(x)
+        pred = torch.softmax(output,1)
         with torch.no_grad():
-            y_pred1 = model(x1)
+            output1 = model(x1)
+            pred1 = torch.softmax(output1,1)
 
-        loss_cl = mse_fn(y_pred,y_pred1) / float(args.num_classes)
-        loss_ce = ce_fn(y_pred,y)
+        loss_cl = mse_fn(pred,pred1) / float(args.num_classes)
+        loss_ce = ce_fn(output,y)
 
     
         #weight_cl = cal_consistency_weight(epoch, end_ep=(args.max_epoch//2), end_w=1.0)
@@ -220,10 +222,12 @@ def train_model1(confident_loader,unconfident_loader,model,optimizer,epoch,logge
         input1_concat_var = torch.cat([input1_conf,input1_unconf])
 
         output = model(input_concat_var)
+        pred = torch.softmax(output,1)
         with torch.no_grad():
             output1 = model(input1_concat_var)
+            pred1 = torch.softmax(output1,1)
 
-        loss_cl = mse_fn(output,output1) / float(args.num_classes)
+        loss_cl = mse_fn(pred,pred1) / float(args.num_classes)
         loss_ce = ce_fn(output[:sc], target_conf)
         
     
@@ -296,11 +300,13 @@ def train_model1_mix(confident_loader,unconfident_loader,model,optimizer,epoch,i
         input1_all = torch.cat([mixed_input1,input1_unconf],0)
 
         output_all = model(input_all)
+        pred = torch.softmax(output_all,1)
         with torch.no_grad():
             output1_all = model(input1_all)
+            pred1 = torch.softmax(output1_all,1)
 
         loss_ce = l * ce_fn(output_all[:sc],target_a) + (1 - l) *ce_fn(output_all[:sc],target_b)
-        loss_cl = mse_fn( torch.softmax(output_all[sc:],1), torch.softmax(output1_all[sc:],1) )
+        loss_cl = mse_fn( pred[sc:], pred1[sc:] )
         #loss_unconf = l1_fn(torch.sum(torch.softmax(output1_all[sc:],1) ** 2 , 1), torch.cuda.FloatTensor(su).fill_(1)) / float(args.num_classes)
         
         #weight_cl_max = 20.0
