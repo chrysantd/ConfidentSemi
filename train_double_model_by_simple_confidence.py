@@ -192,9 +192,8 @@ def train_model2(trainloader,model,optimizer,epoch,max_epoch,logger=None):
             x = x.cuda()
             y = y.cuda()
         
-        feat = model.feat(x)
-        output = model.fc(feat)
-        pred = torch.softmax(output,1)
+        
+        output = model(x)
 
         loss_ce = ce_fn(output,y)
 
@@ -633,12 +632,12 @@ def main():
         evaluate(testloader,model1,logger,'test')        
 
         if best_model1_acc >= best_val_acc:
-            round_ratio = max(round_ratio/1.5, args.round_ratio)
+            round_ratio = round_ratio * 2            
             #model1.load_state_dict(torch.load(best_model1_path))
             #model2.load_state_dict(torch.load(best_model2_path))    
             #skip_model2 = True        
         else:         
-            round_ratio = round_ratio * 2
+            round_ratio = max(round_ratio/1.5, args.round_ratio)
             torch.save(model1.state_dict(), best_model1_path)
             best_model1_acc = best_val_acc
             #skip_model2 = False
